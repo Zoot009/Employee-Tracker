@@ -1,0 +1,139 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Employee {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  employeeCode String   @unique @map("employee_code")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  assignments      Assignment[]
+  logs             Log[]
+  warnings         Warning[]
+  submissions      SubmissionStatus[]
+  breaks           Break[]
+  issues           Issue[]
+
+  @@map("employees")
+}
+
+model Tag {
+  id          Int      @id @default(autoincrement())
+  tagName     String   @map("tag_name")
+  timeMinutes Int      @map("time_minutes")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  assignments Assignment[]
+  logs        Log[]
+
+  @@map("tags")
+}
+
+model Assignment {
+  id          Int      @id @default(autoincrement())
+  employeeId  Int      @map("employee_id")
+  tagId       Int      @map("tag_id")
+  isMandatory Boolean  @default(false) @map("is_mandatory")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  tag      Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, tagId], name: "employee_tag")
+  @@map("assignments")
+}
+
+model Log {
+  id           Int      @id @default(autoincrement())
+  employeeId   Int      @map("employee_id")
+  tagId        Int      @map("tag_id")
+  count        Int      @default(0)
+  totalMinutes Int      @default(0) @map("total_minutes")
+  logDate      DateTime @map("log_date") @db.Date
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  tag      Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, tagId, logDate], name: "employee_tag_date")
+  @@map("logs")
+}
+
+model Warning {
+  id             Int      @id @default(autoincrement())
+  employeeId     Int      @map("employee_id")
+  warningDate    DateTime @map("warning_date") @db.Date
+  warningMessage String?  @map("warning_message")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("warnings")
+}
+
+model SubmissionStatus {
+  id             Int      @id @default(autoincrement())
+  employeeId     Int      @map("employee_id")
+  submissionDate DateTime @map("submission_date") @db.Date
+  submissionTime DateTime @default(now()) @map("submission_time")
+  isLocked       Boolean  @default(true) @map("is_locked")
+  totalMinutes   Int      @default(0) @map("total_minutes")
+  statusMessage  String   @default("Data submitted successfully") @map("status_message")
+
+  // Relations
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, submissionDate], name: "employee_date")
+  @@map("submission_status")
+}
+
+model Break {
+  id            Int       @id @default(autoincrement())
+  employeeId    Int       @map("employee_id")
+  breakDate     DateTime  @map("break_date") @db.Date
+  breakInTime   DateTime? @map("break_in_time")
+  breakOutTime  DateTime? @map("break_out_time")
+  breakDuration Int       @default(0) @map("break_duration")
+  isActive      Boolean   @default(false) @map("is_active")
+  warningSent   Boolean   @default(false) @map("warning_sent")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("breaks")
+}
+
+model Issue {
+  id               Int       @id @default(autoincrement())
+  employeeId       Int       @map("employee_id")
+  issueCategory    String    @map("issue_category")
+  issueDescription String    @map("issue_description")
+  issueStatus      String    @default("pending") @map("issue_status")
+  raisedDate       DateTime  @default(now()) @map("raised_date")
+  resolvedDate     DateTime? @map("resolved_date")
+  adminResponse    String?   @map("admin_response")
+  daysElapsed      Int       @default(0) @map("days_elapsed")
+
+  // Relations
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("issues")
+}
