@@ -1,7 +1,7 @@
-// src/app/page.tsx
+// 1. Fix src/app/page.tsx - Remove lazy loading that might be causing issues
 'use client';
 
-import { useState, Suspense, lazy } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'react-hot-toast';
 import { Users, Settings, BarChart3, Clock } from 'lucide-react';
@@ -9,21 +9,7 @@ import { employeeApi } from '@/lib/api-client';
 import { Employee } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-
-// Lazy load the EmployeePanel to reduce initial bundle size
-const EmployeePanel = lazy(() => import('@/components/employee/EmployeePanel'));
-
-// Loading component for EmployeePanel
-function EmployeePanelLoading() {
-  return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-        <p className="text-gray-600">Loading employee dashboard...</p>
-      </div>
-    </div>
-  );
-}
+import EmployeePanel from '@/components/employee/EmployeePanel';
 
 // Login form component
 function LoginForm({
@@ -182,13 +168,9 @@ export default function HomePage() {
     router.push('/admin');
   };
 
-  // If employee is logged in, show employee panel with lazy loading
+  // If employee is logged in, show employee panel
   if (currentEmployee) {
-    return (
-      <Suspense fallback={<EmployeePanelLoading />}>
-        <EmployeePanel employee={currentEmployee} onLogout={handleLogout} />
-      </Suspense>
-    );
+    return <EmployeePanel employee={currentEmployee} onLogout={handleLogout} />;
   }
 
   // Show login page
