@@ -1,9 +1,9 @@
+// src/app/admin/employees/page.tsx
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { toast } from 'react-hot-toast';
+import React, { useState, Suspense } from 'react';
 import { Plus, Edit, Trash2, Users } from 'lucide-react';
-import { employeeApi } from '@/lib/api-client';
+import { useEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee } from '@/hooks/useEmployees';
 import { Employee } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,9 +18,62 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-export default function EmployeesPage() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [loading, setLoading] = useState(true);
+// Loading component
+function EmployeesLoading() {
+  return (
+    <div className="p-8">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <div className="h-8 bg-gray-200 rounded w-48 mb-2 animate-pulse"></div>
+          <div className="h-4 bg-gray-200 rounded w-64 animate-pulse"></div>
+        </div>
+        <div className="h-10 bg-gray-200 rounded w-32 animate-pulse"></div>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <div className="divide-y">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="px-6 py-4 flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <div className="h-10 w-10 bg-gray-200 rounded-full animate-pulse"></div>
+                  <div>
+                    <div className="h-4 bg-gray-200 rounded w-32 mb-2 animate-pulse"></div>
+                    <div className="h-3 bg-gray-200 rounded w-48 animate-pulse"></div>
+                  </div>
+                </div>
+                <div className="flex space-x-2">
+                  <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+                  <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// Error component
+function EmployeesError({ error, onRetry }: { error: Error; onRetry: () => void }) {
+  return (
+    <div className="p-8">
+      <Card>
+        <CardContent className="text-center py-12">
+          <Users className="mx-auto h-12 w-12 text-red-500" />
+          <h3 className="mt-4 text-lg font-medium text-red-900">Error Loading Employees</h3>
+          <p className="mt-2 text-sm text-red-600">{error.message}</p>
+          <Button onClick={onRetry} className="mt-4">
+            Try Again
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// Main component
+function EmployeesContent() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [formData, setFormData] = useState({
@@ -28,62 +81,27 @@ export default function EmployeesPage() {
     email: '',
     employeeCode: '',
   });
-  const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    loadEmployees();
-  }, []);
+  const { data: employees = [], isLoading, error, refetch } = useEmployees();
+  const createEmployee = useCreateEmployee();
+  const updateEmployee = useUpdateEmployee();
+  const deleteEmployee = useDeleteEmployee();
 
-  const loadEmployees = async () => {
-    try {
-      const response = await employeeApi.getAll();
-      if (response.data.success) {
-        setEmployees(response.data.data || []);
-      } else {
-        console.error('API returned error:', response.data.error);
-        toast.error(response.data.error || 'Failed to load employees');
-      }
-    } catch (error: any) {
-      console.error('Error loading employees:', error);
-      
-      // More specific error handling
-      if (error.response?.status === 500) {
-        toast.error('Database connection error. Please check your setup.');
-      } else if (error.response?.data?.error) {
-        toast.error(error.response.data.error);
-      } else {
-        toast.error('Failed to load employees. Please try again.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  if (isLoading) return <EmployeesLoading />;
+  if (error) return <EmployeesError error={error as Error} onRetry={refetch} />;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
-
+    
     try {
       if (editingEmployee) {
-        const response = await employeeApi.update(editingEmployee.id, formData);
-        if (response.data.success) {
-          toast.success('Employee updated successfully');
-          loadEmployees();
-        }
+        await updateEmployee.mutateAsync({ id: editingEmployee.id, data: formData });
       } else {
-        const response = await employeeApi.create(formData);
-        if (response.data.success) {
-          toast.success('Employee created successfully');
-          loadEmployees();
-        }
+        await createEmployee.mutateAsync(formData);
       }
-      
       closeDialog();
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.error || 'Operation failed';
-      toast.error(errorMessage);
-    } finally {
-      setSubmitting(false);
+    } catch (error) {
+      // Error is handled by the mutation hooks
     }
   };
 
@@ -103,12 +121,9 @@ export default function EmployeesPage() {
     }
 
     try {
-      await employeeApi.delete(employee.id);
-      toast.success('Employee deleted successfully');
-      loadEmployees();
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.error || 'Failed to delete employee';
-      toast.error(errorMessage);
+      await deleteEmployee.mutateAsync(employee.id);
+    } catch (error) {
+      // Error is handled by the mutation hook
     }
   };
 
@@ -132,15 +147,7 @@ export default function EmployeesPage() {
     });
   };
 
-  if (loading) {
-    return (
-      <div className="p-8">
-        <div className="flex items-center justify-center min-h-[400px]">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-        </div>
-      </div>
-    );
-  }
+  const isSubmitting = createEmployee.isPending || updateEmployee.isPending;
 
   return (
     <div className="p-8">
@@ -201,6 +208,7 @@ export default function EmployeesPage() {
                       onClick={() => handleEdit(employee)}
                       variant="outline"
                       size="sm"
+                      disabled={deleteEmployee.isPending}
                     >
                       <Edit className="h-4 w-4" />
                     </Button>
@@ -208,6 +216,7 @@ export default function EmployeesPage() {
                       onClick={() => handleDelete(employee)}
                       variant="destructive"
                       size="sm"
+                      disabled={deleteEmployee.isPending}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -242,6 +251,7 @@ export default function EmployeesPage() {
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   required
+                  disabled={isSubmitting}
                 />
               </div>
               <div className="grid gap-2">
@@ -252,6 +262,7 @@ export default function EmployeesPage() {
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   required
+                  disabled={isSubmitting}
                 />
               </div>
               <div className="grid gap-2">
@@ -261,20 +272,35 @@ export default function EmployeesPage() {
                   value={formData.employeeCode}
                   onChange={(e) => setFormData({ ...formData, employeeCode: e.target.value })}
                   required
+                  disabled={isSubmitting}
                 />
               </div>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={closeDialog}>
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={closeDialog}
+                disabled={isSubmitting}
+              >
                 Cancel
               </Button>
-              <Button type="submit" disabled={submitting}>
-                {submitting ? 'Saving...' : (editingEmployee ? 'Update' : 'Create')}
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? 'Saving...' : (editingEmployee ? 'Update' : 'Create')}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// Main page component with Suspense
+export default function EmployeesPage() {
+  return (
+    <Suspense fallback={<EmployeesLoading />}>
+      <EmployeesContent />
+    </Suspense>
   );
 }
