@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     // Also check submission status
     const submissionStatus = await prisma.submissionStatus.findUnique({
       where: {
-        employee_date: {
+        employeeId_date: {
           employeeId: validatedQuery.employeeId,
           submissionDate: new Date(validatedQuery.logDate),
         },
