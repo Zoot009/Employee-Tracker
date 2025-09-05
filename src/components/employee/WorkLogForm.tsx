@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'react-hot-toast';
 import { Save, AlertTriangle, CheckCircle } from 'lucide-react';
 import { logApi } from '@/lib/api-client';
@@ -29,30 +29,45 @@ export default function WorkLogForm({
 }: WorkLogFormProps) {
   const [logs, setLogs] = useState<Record<number, number>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [totalMinutes, setTotalMinutes] = useState(0);
+  const [hasChanges, setHasChanges] = useState(false);
+
+  // Memoize calculations for better performance
+  const totalMinutes = useMemo(() => {
+    return assignments.reduce((total, assignment) => {
+      const count = logs[assignment.tagId] || 0;
+      const minutes = count * (assignment.tag?.timeMinutes || 0);
+      return total + minutes;
+    }, 0);
+  }, [logs, assignments]);
+
+  const missingMandatory = useMemo(() => {
+    return assignments.some(assignment => 
+      assignment.isMandatory && (logs[assignment.tagId] || 0) === 0
+    );
+  }, [assignments, logs]);
+
+  const hasData = useMemo(() => {
+    return Object.values(logs).some(count => count > 0);
+  }, [logs]);
 
   // Initialize logs state when assignments change
   useEffect(() => {
     const initialLogs: Record<number, number> = {};
     assignments.forEach(assignment => {
-      initialLogs[assignment.tagId] = 0;
+      initialLogs[assignment.tagId] = logs[assignment.tagId] || 0;
     });
     setLogs(initialLogs);
-    loadExistingData();
-  }, [assignments, employeeId, selectedDate]);
+    setHasChanges(false);
+  }, [assignments]);
 
-  // Calculate total minutes when logs change
+  // Load existing data when date or employee changes
   useEffect(() => {
-    let total = 0;
-    assignments.forEach(assignment => {
-      const count = logs[assignment.tagId] || 0;
-      const minutes = count * (assignment.tag?.timeMinutes || 0);
-      total += minutes;
-    });
-    setTotalMinutes(total);
-  }, [logs, assignments]);
+    if (employeeId && selectedDate) {
+      loadExistingData();
+    }
+  }, [employeeId, selectedDate]);
 
-  const loadExistingData = async () => {
+  const loadExistingData = useCallback(async () => {
     try {
       const response = await logApi.getByDate(employeeId, selectedDate);
       if (response.data.success && response.data.data) {
@@ -60,26 +75,44 @@ export default function WorkLogForm({
         response.data.data.forEach(log => {
           existingLogs[log.tagId] = log.count;
         });
-        setLogs(existingLogs);
+        setLogs(prev => ({ ...prev, ...existingLogs }));
+        setHasChanges(false);
       }
     } catch (error) {
       console.error('Error loading existing data:', error);
+      // Don't show error toast for existing data load failures
     }
-  };
+  }, [employeeId, selectedDate]);
 
-  const handleCountChange = (tagId: number, count: number) => {
-    setLogs(prev => ({
-      ...prev,
-      [tagId]: Math.max(0, count),
-    }));
-  };
+  const handleCountChange = useCallback((tagId: number, count: number) => {
+    const newCount = Math.max(0, count);
+    setLogs(prev => {
+      const updated = { ...prev, [tagId]: newCount };
+      setHasChanges(true);
+      return updated;
+    });
+  }, []);
+
+  const calculateTagTotal = useCallback((tagId: number, timeMinutes: number): number => {
+    const count = logs[tagId] || 0;
+    return count * timeMinutes;
+  }, [logs]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!confirm('Once submitted, this data will be locked and cannot be edited. Continue?')) {
+    if (!hasData) {
+      toast.error('Please enter at least one count before submitting.');
       return;
     }
+
+    if (missingMandatory) {
+      const confirmed = confirm('Warning: You have missed some mandatory tags. Continue anyway?');
+      if (!confirmed) return;
+    }
+
+    const confirmed = confirm('Once submitted, this data will be locked and cannot be edited. Continue?');
+    if (!confirmed) return;
 
     setIsSubmitting(true);
     
@@ -89,18 +122,6 @@ export default function WorkLogForm({
         count,
       }));
 
-      // Check for missing mandatory tags
-      const missingMandatory = assignments.some(assignment => 
-        assignment.isMandatory && (logs[assignment.tagId] || 0) === 0
-      );
-
-      if (missingMandatory) {
-        if (!confirm('Warning: You have missed some mandatory tags. Continue anyway?')) {
-          setIsSubmitting(false);
-          return;
-        }
-      }
-
       const response = await logApi.submit({
         employeeId,
         logs: logEntries,
@@ -108,7 +129,7 @@ export default function WorkLogForm({
       });
 
       if (response.data.success) {
-        toast.success('Work log submitted successfully!');
+        setHasChanges(false);
         onSubmitSuccess();
       } else {
         toast.error(response.data.error || 'Failed to submit work log');
@@ -121,126 +142,181 @@ export default function WorkLogForm({
     }
   };
 
-  const calculateTagTotal = (tagId: number, timeMinutes: number): number => {
-    const count = logs[tagId] || 0;
-    return count * timeMinutes;
-  };
+  // Show warning if user tries to leave with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasChanges]);
 
   return (
     <div className="bg-white rounded-lg shadow">
       <div className="px-6 py-4 border-b border-gray-200">
-        <h2 className="text-lg font-semibold text-gray-900">
-          Work Log - {new Date(selectedDate).toLocaleDateString('en-IN', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          })}
-        </h2>
+        <div className="flex justify-between items-center">
+          <h2 className="text-lg font-semibold text-gray-900">
+            Work Log - {new Date(selectedDate).toLocaleDateString('en-IN', {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            })}
+          </h2>
+          {hasChanges && (
+            <span className="text-sm text-orange-600 flex items-center">
+              <div className="w-2 h-2 bg-orange-500 rounded-full mr-2"></div>
+              Unsaved changes
+            </span>
+          )}
+        </div>
       </div>
 
       <form onSubmit={handleSubmit} className="p-6">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Tag
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Type
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Time/Unit
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Count
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Total
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {assignments.map((assignment) => {
-                const count = logs[assignment.tagId] || 0;
-                const timeMinutes = assignment.tag?.timeMinutes || 0;
-                const totalMinutes = calculateTagTotal(assignment.tagId, timeMinutes);
-                
-                return (
-                  <tr key={assignment.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                      {assignment.tag?.tagName}
+        {assignments.length === 0 ? (
+          <div className="text-center py-8">
+            <AlertTriangle className="mx-auto h-12 w-12 text-gray-400" />
+            <h3 className="mt-4 text-lg font-medium text-gray-900">No Tags Assigned</h3>
+            <p className="mt-2 text-sm text-gray-600">
+              You don't have any work tags assigned. Please contact your administrator.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Tag
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Type
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Time/Unit
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Count
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Total
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {assignments.map((assignment) => {
+                    const count = logs[assignment.tagId] || 0;
+                    const timeMinutes = assignment.tag?.timeMinutes || 0;
+                    const totalMinutes = calculateTagTotal(assignment.tagId, timeMinutes);
+                    const isMissing = assignment.isMandatory && count === 0;
+                    
+                    return (
+                      <tr key={assignment.id} className={isMissing ? 'bg-red-50' : ''}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {assignment.tag?.tagName}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {assignment.isMandatory ? (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                              <AlertTriangle className="w-3 h-3 mr-1" />
+                              Mandatory
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                              Optional
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {timeMinutes} min
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <Input
+                            type="number"
+                            min="0"
+                            max="999"
+                            value={count}
+                            onChange={(e) => handleCountChange(assignment.tagId, parseInt(e.target.value) || 0)}
+                            className={`w-20 ${isMissing ? 'border-red-300 focus:border-red-500' : ''}`}
+                            placeholder="0"
+                          />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
+                          {totalMinutes} min
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="bg-gray-50">
+                  <tr>
+                    <td colSpan={4} className="px-6 py-4 text-sm font-medium text-gray-900 text-right">
+                      Total Time:
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {assignment.isMandatory ? (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                          <AlertTriangle className="w-3 h-3 mr-1" />
-                          Mandatory
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          <CheckCircle className="w-3 h-3 mr-1" />
-                          Optional
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {timeMinutes} min
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <Input
-                        type="number"
-                        min="0"
-                        value={count}
-                        onChange={(e) => handleCountChange(assignment.tagId, parseInt(e.target.value) || 0)}
-                        className="w-20"
-                      />
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
-                      {totalMinutes} min
+                    <td className="px-6 py-4 text-sm font-bold text-gray-900">
+                      {formatMinutesToHours(totalMinutes)}
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-            <tfoot className="bg-gray-50">
-              <tr>
-                <td colSpan={4} className="px-6 py-4 text-sm font-medium text-gray-900 text-right">
-                  Total Time:
-                </td>
-                <td className="px-6 py-4 text-sm font-bold text-gray-900">
-                  {formatMinutesToHours(totalMinutes)}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+                </tfoot>
+              </table>
+            </div>
 
-        <div className="mt-6 space-y-4">
-          <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
-            <div className="flex">
-              <AlertTriangle className="h-5 w-5 text-yellow-400" />
-              <div className="ml-3">
-                <h3 className="text-sm font-medium text-yellow-800">
-                  Important Notice
-                </h3>
-                <div className="mt-2 text-sm text-yellow-700">
-                  <p>Once submitted, this data will be locked and cannot be edited. Please review your entries carefully before submitting.</p>
+            <div className="mt-6 space-y-4">
+              {missingMandatory && (
+                <div className="bg-red-50 border border-red-200 rounded-md p-4">
+                  <div className="flex">
+                    <AlertTriangle className="h-5 w-5 text-red-400" />
+                    <div className="ml-3">
+                      <h3 className="text-sm font-medium text-red-800">
+                        Missing Mandatory Tags
+                      </h3>
+                      <div className="mt-2 text-sm text-red-700">
+                        <p>You have not filled in some mandatory tags. Please complete all mandatory fields or contact your supervisor if you didn't work on these tasks.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                <div className="flex">
+                  <AlertTriangle className="h-5 w-5 text-yellow-400" />
+                  <div className="ml-3">
+                    <h3 className="text-sm font-medium text-yellow-800">
+                      Important Notice
+                    </h3>
+                    <div className="mt-2 text-sm text-yellow-700">
+                      <p>Once submitted, this data will be locked and cannot be edited. Please review your entries carefully before submitting.</p>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
 
-          <div className="flex justify-end">
-            <Button
-              type="submit"
-              className="flex items-center space-x-2"
-            >
-              <Save className="w-4 h-4" />
-              <span>Submit & Lock Work Log</span>
-            </Button>
-          </div>
-        </div>
+              <div className="flex justify-between items-center">
+                <div className="text-sm text-gray-600">
+                  {hasData ? (
+                    <span>Ready to submit {formatMinutesToHours(totalMinutes)} of work</span>
+                  ) : (
+                    <span>Enter your work counts above</span>
+                  )}
+                </div>
+                <Button
+                  type="submit"
+                  disabled={isSubmitting || !hasData}
+                  className="flex items-center space-x-2"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{isSubmitting ? 'Submitting...' : 'Submit & Lock Work Log'}</span>
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
       </form>
     </div>
   );

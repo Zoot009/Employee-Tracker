@@ -1,4 +1,5 @@
-import axios, { AxiosResponse } from 'axios';
+// src/lib/api-client.ts
+import axios, { AxiosResponse, AxiosRequestConfig } from 'axios';
 import { 
   Employee, 
   CreateEmployeeRequest,
@@ -21,138 +22,273 @@ import {
   DateFilter
 } from '@/types';
 
-// Create axios instance with base configuration
+// Create axios instance with optimizations
 const api = axios.create({
   baseURL: '/api',
-  timeout: 10000,
+  timeout: 30000, // Increased timeout for slow connections
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Response interceptor for error handling
+// Request cache for GET requests (5 minutes)
+const requestCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Request deduplication for concurrent requests
+const pendingRequests = new Map<string, Promise<any>>();
+
+// Cache management
+function getCacheKey(url: string, params?: any): string {
+  return `${url}${params ? JSON.stringify(params) : ''}`;
+}
+
+function getCachedData(key: string): any | null {
+  const cached = requestCache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    return cached.data;
+  }
+  requestCache.delete(key);
+  return null;
+}
+
+function setCachedData(key: string, data: any): void {
+  requestCache.set(key, { data, timestamp: Date.now() });
+}
+
+// Enhanced request interceptor with caching and deduplication
+api.interceptors.request.use(
+  (config: AxiosRequestConfig) => {
+    // Only cache GET requests
+    if (config.method === 'get') {
+      const cacheKey = getCacheKey(config.url!, config.params);
+      
+      // Return cached data if available
+      const cachedData = getCachedData(cacheKey);
+      if (cachedData) {
+        return Promise.resolve({ ...config, __cached: true, __cachedData: cachedData });
+      }
+      
+      // Handle concurrent requests
+      if (pendingRequests.has(cacheKey)) {
+        return pendingRequests.get(cacheKey)!.then(() => config);
+      }
+    }
+    
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// Enhanced response interceptor
 api.interceptors.response.use(
-  (response: AxiosResponse) => response,
+  (response: AxiosResponse) => {
+    // Handle cached responses
+    if (response.config.__cached && response.config.__cachedData) {
+      return { ...response, data: response.config.__cachedData };
+    }
+    
+    // Cache GET responses
+    if (response.config.method === 'get' && response.data?.success) {
+      const cacheKey = getCacheKey(response.config.url!, response.config.params);
+      setCachedData(cacheKey, response.data);
+      pendingRequests.delete(cacheKey);
+    }
+    
+    return response;
+  },
   (error) => {
-    // Log more detailed error information
-    console.error('API Error Details:', {
+    // Clean up pending requests on error
+    if (error.config?.method === 'get') {
+      const cacheKey = getCacheKey(error.config.url, error.config.params);
+      pendingRequests.delete(cacheKey);
+    }
+    
+    console.error('API Error:', {
       status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data,
       message: error.message,
       url: error.config?.url,
-      method: error.config?.method,
     });
     return Promise.reject(error);
   }
 );
 
-// Employee API
+// Helper function for cached GET requests
+async function cachedGet<T>(url: string, params?: any): Promise<AxiosResponse<T>> {
+  const cacheKey = getCacheKey(url, params);
+  
+  // Check if request is already pending
+  if (pendingRequests.has(cacheKey)) {
+    return pendingRequests.get(cacheKey);
+  }
+  
+  // Make the request and store promise
+  const requestPromise = api.get(url, { params });
+  pendingRequests.set(cacheKey, requestPromise);
+  
+  try {
+    const response = await requestPromise;
+    return response;
+  } finally {
+    pendingRequests.delete(cacheKey);
+  }
+}
+
+// Employee API with optimizations
 export const employeeApi = {
   getAll: (): Promise<AxiosResponse<ApiResponse<Employee[]>>> =>
-    api.get('/employees'),
+    cachedGet('/employees'),
     
   getById: (id: number): Promise<AxiosResponse<ApiResponse<Employee>>> =>
-    api.get(`/employees/${id}`),
+    cachedGet(`/employees/${id}`),
     
-  create: (data: CreateEmployeeRequest): Promise<AxiosResponse<ApiResponse<Employee>>> =>
-    api.post('/employees', data),
+  create: (data: CreateEmployeeRequest): Promise<AxiosResponse<ApiResponse<Employee>>> => {
+    // Clear employees cache after create
+    requestCache.delete('/employees');
+    return api.post('/employees', data);
+  },
     
-  update: (id: number, data: Partial<CreateEmployeeRequest>): Promise<AxiosResponse<ApiResponse<Employee>>> =>
-    api.put(`/employees/${id}`, data),
+  update: (id: number, data: Partial<CreateEmployeeRequest>): Promise<AxiosResponse<ApiResponse<Employee>>> => {
+    // Clear relevant caches
+    requestCache.delete('/employees');
+    requestCache.delete(`/employees/${id}`);
+    return api.put(`/employees/${id}`, data);
+  },
     
-  delete: (id: number): Promise<AxiosResponse<ApiResponse<null>>> =>
-    api.delete(`/employees/${id}`),
+  delete: (id: number): Promise<AxiosResponse<ApiResponse<null>>> => {
+    // Clear relevant caches
+    requestCache.delete('/employees');
+    requestCache.delete(`/employees/${id}`);
+    return api.delete(`/employees/${id}`);
+  },
     
   login: (employeeCode: string): Promise<AxiosResponse<ApiResponse<Employee>>> =>
     api.post('/employees/login', { employeeCode }),
 };
 
-// Tag API
+// Tag API with optimizations
 export const tagApi = {
   getAll: (): Promise<AxiosResponse<ApiResponse<Tag[]>>> =>
-    api.get('/tags'),
+    cachedGet('/tags'),
     
-  create: (data: CreateTagRequest): Promise<AxiosResponse<ApiResponse<Tag>>> =>
-    api.post('/tags', data),
+  create: (data: CreateTagRequest): Promise<AxiosResponse<ApiResponse<Tag>>> => {
+    requestCache.delete('/tags');
+    return api.post('/tags', data);
+  },
     
-  update: (id: number, data: Partial<CreateTagRequest>): Promise<AxiosResponse<ApiResponse<Tag>>> =>
-    api.put(`/tags/${id}`, data),
+  update: (id: number, data: Partial<CreateTagRequest>): Promise<AxiosResponse<ApiResponse<Tag>>> => {
+    requestCache.delete('/tags');
+    return api.put(`/tags/${id}`, data);
+  },
     
-  delete: (id: number): Promise<AxiosResponse<ApiResponse<null>>> =>
-    api.delete(`/tags/${id}`),
+  delete: (id: number): Promise<AxiosResponse<ApiResponse<null>>> => {
+    requestCache.delete('/tags');
+    return api.delete(`/tags/${id}`);
+  },
 };
 
-// Assignment API
+// Assignment API with optimizations
 export const assignmentApi = {
   getAll: (): Promise<AxiosResponse<ApiResponse<Assignment[]>>> =>
-    api.get('/assignments'),
+    cachedGet('/assignments'),
     
   getByEmployee: (employeeId: number): Promise<AxiosResponse<ApiResponse<Assignment[]>>> =>
-    api.get(`/assignments?employeeId=${employeeId}`),
+    cachedGet(`/assignments`, { employeeId }),
     
-  create: (data: CreateAssignmentRequest): Promise<AxiosResponse<ApiResponse<Assignment>>> =>
-    api.post('/assignments', data),
+  create: (data: CreateAssignmentRequest): Promise<AxiosResponse<ApiResponse<Assignment>>> => {
+    // Clear assignment caches
+    requestCache.delete('/assignments');
+    Array.from(requestCache.keys())
+      .filter(key => key.startsWith('/assignments'))
+      .forEach(key => requestCache.delete(key));
+    return api.post('/assignments', data);
+  },
     
-  delete: (id: number): Promise<AxiosResponse<ApiResponse<null>>> =>
-    api.delete(`/assignments/${id}`),
+  delete: (id: number): Promise<AxiosResponse<ApiResponse<null>>> => {
+    // Clear assignment caches
+    requestCache.delete('/assignments');
+    Array.from(requestCache.keys())
+      .filter(key => key.startsWith('/assignments'))
+      .forEach(key => requestCache.delete(key));
+    return api.delete(`/assignments/${id}`);
+  },
 };
 
-// Log API
+// Log API with optimizations
 export const logApi = {
   getByDate: (employeeId: number, logDate: string): Promise<AxiosResponse<ApiResponse<Log[]>>> =>
-    api.get(`/logs/by-date?employeeId=${employeeId}&logDate=${logDate}`),
+    cachedGet(`/logs/by-date`, { employeeId, logDate }),
     
   getByDateRange: (filter: EmployeeFilter): Promise<AxiosResponse<ApiResponse<Log[]>>> =>
-    api.get('/logs', { params: filter }),
+    cachedGet('/logs', filter),
     
-  submit: (data: SubmitLogRequest): Promise<AxiosResponse<ApiResponse<null>>> =>
-    api.post('/logs', data),
+  submit: (data: SubmitLogRequest): Promise<AxiosResponse<ApiResponse<null>>> => {
+    // Clear log caches for this employee and date
+    Array.from(requestCache.keys())
+      .filter(key => key.includes('/logs') && (
+        key.includes(`employeeId\":${data.employeeId}`) ||
+        key.includes(`logDate\":\"${data.logDate}\"`)
+      ))
+      .forEach(key => requestCache.delete(key));
+    return api.post('/logs', data);
+  },
     
-  update: (id: number, count: number): Promise<AxiosResponse<ApiResponse<Log>>> =>
-    api.put(`/logs/${id}`, { count }),
-    
-  getDailyChart: (logDate: string): Promise<AxiosResponse<ApiResponse<any>>> =>
-    api.get(`/logs/daily-chart?logDate=${logDate}`),
+  update: (id: number, count: number): Promise<AxiosResponse<ApiResponse<Log>>> => {
+    // Clear log caches
+    Array.from(requestCache.keys())
+      .filter(key => key.includes('/logs'))
+      .forEach(key => requestCache.delete(key));
+    return api.put(`/logs/${id}`, { count });
+  },
 };
 
 // Warning API
 export const warningApi = {
   getAll: (): Promise<AxiosResponse<ApiResponse<Warning[]>>> =>
-    api.get('/warnings'),
+    cachedGet('/warnings'),
     
   getByEmployee: (employeeId: number): Promise<AxiosResponse<ApiResponse<Warning[]>>> =>
-    api.get(`/warnings?employeeId=${employeeId}`),
+    cachedGet('/warnings', { employeeId }),
     
   getActive: (): Promise<AxiosResponse<ApiResponse<Warning[]>>> =>
-    api.get('/warnings?active=true'),
+    cachedGet('/warnings', { active: true }),
     
-  create: (data: CreateWarningRequest): Promise<AxiosResponse<ApiResponse<Warning>>> =>
-    api.post('/warnings', data),
+  create: (data: CreateWarningRequest): Promise<AxiosResponse<ApiResponse<Warning>>> => {
+    Array.from(requestCache.keys())
+      .filter(key => key.includes('/warnings'))
+      .forEach(key => requestCache.delete(key));
+    return api.post('/warnings', data);
+  },
     
-  dismiss: (id: number): Promise<AxiosResponse<ApiResponse<null>>> =>
-    api.put(`/warnings/${id}`, { isActive: false }),
+  dismiss: (id: number): Promise<AxiosResponse<ApiResponse<null>>> => {
+    Array.from(requestCache.keys())
+      .filter(key => key.includes('/warnings'))
+      .forEach(key => requestCache.delete(key));
+    return api.put(`/warnings/${id}`, { isActive: false });
+  },
 };
 
-// Break API
+// Break API with optimizations
 export const breakApi = {
-  getByDate: (employeeId: number, breakDate: string): Promise<AxiosResponse<ApiResponse<Break[]>>> =>
-    api.get(`/breaks?employeeId=${employeeId}&breakDate=${breakDate}`),
-    
   getByDateRange: (filter: EmployeeFilter): Promise<AxiosResponse<ApiResponse<Break[]>>> =>
-    api.get('/breaks', { params: filter }),
+    cachedGet('/breaks', filter),
     
-  getActive: (): Promise<AxiosResponse<ApiResponse<Break[]>>> =>
-    api.get('/breaks?active=true'),
+  breakIn: (data: BreakRequest): Promise<AxiosResponse<ApiResponse<Break>>> => {
+    Array.from(requestCache.keys())
+      .filter(key => key.includes('/breaks'))
+      .forEach(key => requestCache.delete(key));
+    return api.post('/breaks/in', data);
+  },
     
-  breakIn: (data: BreakRequest): Promise<AxiosResponse<ApiResponse<Break>>> =>
-    api.post('/breaks/in', data),
-    
-  breakOut: (data: BreakRequest): Promise<AxiosResponse<ApiResponse<Break>>> =>
-    api.post('/breaks/out', data),
+  breakOut: (data: BreakRequest): Promise<AxiosResponse<ApiResponse<Break>>> => {
+    Array.from(requestCache.keys())
+      .filter(key => key.includes('/breaks'))
+      .forEach(key => requestCache.delete(key));
+    return api.post('/breaks/out', data);
+  },
     
   getStatus: (employeeId: number): Promise<AxiosResponse<ApiResponse<Break | null>>> =>
-    api.get(`/breaks/status?employeeId=${employeeId}`),
+    api.get(`/breaks/status`, { params: { employeeId } }), // Don't cache active status
     
   sendWarning: (employeeId: number, breakId: number): Promise<AxiosResponse<ApiResponse<null>>> =>
     api.post('/breaks/warning', { employeeId, breakId }),
@@ -161,28 +297,46 @@ export const breakApi = {
 // Issue API
 export const issueApi = {
   getAll: (): Promise<AxiosResponse<ApiResponse<Issue[]>>> =>
-    api.get('/issues'),
+    cachedGet('/issues'),
     
   getByEmployee: (employeeId: number): Promise<AxiosResponse<ApiResponse<Issue[]>>> =>
-    api.get(`/issues?employeeId=${employeeId}`),
+    cachedGet('/issues', { employeeId }),
     
-  getByStatus: (status: string): Promise<AxiosResponse<ApiResponse<Issue[]>>> =>
-    api.get(`/issues?status=${status}`),
+  create: (data: CreateIssueRequest): Promise<AxiosResponse<ApiResponse<Issue>>> => {
+    Array.from(requestCache.keys())
+      .filter(key => key.includes('/issues'))
+      .forEach(key => requestCache.delete(key));
+    return api.post('/issues', data);
+  },
     
-  create: (data: CreateIssueRequest): Promise<AxiosResponse<ApiResponse<Issue>>> =>
-    api.post('/issues', data),
-    
-  update: (id: number, data: UpdateIssueRequest): Promise<AxiosResponse<ApiResponse<Issue>>> =>
-    api.put(`/issues/${id}`, data),
+  update: (id: number, data: UpdateIssueRequest): Promise<AxiosResponse<ApiResponse<Issue>>> => {
+    Array.from(requestCache.keys())
+      .filter(key => key.includes('/issues'))
+      .forEach(key => requestCache.delete(key));
+    return api.put(`/issues/${id}`, data);
+  },
 };
 
 // Dashboard API
 export const dashboardApi = {
   getStats: (): Promise<AxiosResponse<ApiResponse<DashboardStats>>> =>
-    api.get('/dashboard/stats'),
-    
-  getMissingData: (filter: DateFilter): Promise<AxiosResponse<ApiResponse<any>>> =>
-    api.get('/dashboard/missing-data', { params: filter }),
+    api.get('/dashboard/stats'), // Don't cache dashboard stats
+};
+
+// Cache management utilities
+export const cacheUtils = {
+  clear: () => {
+    requestCache.clear();
+    pendingRequests.clear();
+  },
+  
+  clearByPattern: (pattern: string) => {
+    Array.from(requestCache.keys())
+      .filter(key => key.includes(pattern))
+      .forEach(key => requestCache.delete(key));
+  },
+  
+  getSize: () => requestCache.size,
 };
 
 export default api;

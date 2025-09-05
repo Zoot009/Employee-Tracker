@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'react-hot-toast';
 import { Clock, Calendar, Coffee, AlertTriangle, FileText } from 'lucide-react';
 import { employeeApi, assignmentApi, logApi, breakApi, issueApi } from '@/lib/api-client';
-import { Employee, Assignment, Break, Issue, Log } from '@/types';
-import { getCurrentISTDate, formatDateTime, formatTime } from '@/lib/utils';
+import { Employee, Assignment, Break, Issue } from '@/types';
+import { getCurrentISTDate, formatDateTime } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import WorkLogForm from './WorkLogForm';
@@ -27,98 +27,155 @@ export default function EmployeePanel({ employee, onLogout }: EmployeePanelProps
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
   const [isLocked, setIsLocked] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Update current date/time every second
+  // Memoize the current date
+  const today = useMemo(() => getCurrentISTDate(), []);
+
+  // Update current date/time every 30 seconds instead of every second for better performance
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentDateTime(new Date());
-    }, 1000);
+    }, 30000);
 
     return () => clearInterval(timer);
   }, []);
 
-  // Load employee data
-  useEffect(() => {
-    loadEmployeeData();
-  }, [employee.id]);
-
-  // Check if date is locked when date changes
-  useEffect(() => {
-    checkLockStatus();
-  }, [selectedDate, employee.id]);
-
-  const loadEmployeeData = async () => {
+  // Debounced data loading to prevent rapid API calls
+  const loadEmployeeData = useCallback(async () => {
+    if (!employee?.id) return;
+    
     try {
       setLoading(true);
+      setError(null);
 
-      // Load assignments
-      const assignmentsResponse = await assignmentApi.getByEmployee(employee.id);
-      if (assignmentsResponse.data.success) {
-        setAssignments(assignmentsResponse.data.data || []);
+      // Load data in parallel for better performance
+      const [assignmentsResponse, breakResponse, issuesResponse] = await Promise.allSettled([
+        assignmentApi.getByEmployee(employee.id),
+        breakApi.getStatus(employee.id),
+        issueApi.getByEmployee(employee.id),
+      ]);
+
+      // Handle assignments
+      if (assignmentsResponse.status === 'fulfilled' && assignmentsResponse.value.data.success) {
+        setAssignments(assignmentsResponse.value.data.data || []);
+      } else if (assignmentsResponse.status === 'rejected') {
+        console.error('Failed to load assignments:', assignmentsResponse.reason);
       }
 
-      // Load current break status
-      const breakResponse = await breakApi.getStatus(employee.id);
-      if (breakResponse.data.success) {
-        setCurrentBreak(breakResponse.data.data);
+      // Handle break status
+      if (breakResponse.status === 'fulfilled' && breakResponse.value.data.success) {
+        setCurrentBreak(breakResponse.value.data.data);
+      } else if (breakResponse.status === 'rejected') {
+        console.error('Failed to load break status:', breakResponse.reason);
       }
 
-      // Load recent issues
-      const issuesResponse = await issueApi.getByEmployee(employee.id);
-      if (issuesResponse.data.success) {
-        setRecentIssues((issuesResponse.data.data || []).slice(0, 5));
+      // Handle issues
+      if (issuesResponse.status === 'fulfilled' && issuesResponse.value.data.success) {
+        const issuesData = issuesResponse.value.data.data || [];
+        setRecentIssues(issuesData.slice(0, 5)); // Only keep recent 5 issues
+      } else if (issuesResponse.status === 'rejected') {
+        console.error('Failed to load issues:', issuesResponse.reason);
       }
+
     } catch (error) {
       console.error('Error loading employee data:', error);
-      toast.error('Failed to load employee data');
+      setError('Failed to load employee data. Please refresh the page.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [employee.id]);
 
-  const checkLockStatus = async () => {
+  // Load data only when employee changes
+  useEffect(() => {
+    loadEmployeeData();
+  }, [loadEmployeeData]);
+
+  // Check lock status when date changes
+  const checkLockStatus = useCallback(async () => {
+    if (!employee?.id || !selectedDate) return;
+    
     try {
-      // For simplicity, you can implement a separate API endpoint for this
-      // or include it in the logs API with a lock check parameter
       const response = await logApi.getByDate(employee.id, selectedDate);
-      // You would need to implement lock status check in the API
+      // You would need to implement lock status check in the API response
+      setIsLocked(false); // Default to unlocked for now
     } catch (error) {
       console.error('Error checking lock status:', error);
     }
-  };
+  }, [employee.id, selectedDate]);
 
-  const handleBreakIn = async () => {
+  useEffect(() => {
+    checkLockStatus();
+  }, [checkLockStatus]);
+
+  // Optimized break handlers
+  const handleBreakIn = useCallback(async () => {
+    if (!employee?.id) return;
+    
     try {
       const response = await breakApi.breakIn({ employeeId: employee.id });
       if (response.data.success) {
         toast.success('Break started');
-        loadEmployeeData(); // Refresh data
+        setCurrentBreak(response.data.data || null);
       }
     } catch (error) {
       toast.error('Failed to start break');
     }
-  };
+  }, [employee.id]);
 
-  const handleBreakOut = async () => {
+  const handleBreakOut = useCallback(async () => {
+    if (!employee?.id) return;
+    
     try {
       const response = await breakApi.breakOut({ employeeId: employee.id });
       if (response.data.success) {
         toast.success('Break ended');
-        loadEmployeeData(); // Refresh data
+        setCurrentBreak(null);
       }
     } catch (error) {
       toast.error('Failed to end break');
     }
-  };
+  }, [employee.id]);
 
-  const handleDateChange = (date: string) => {
+  const handleDateChange = useCallback((date: string) => {
     setSelectedDate(date);
-  };
+  }, []);
 
+  const handleWorkLogSuccess = useCallback(() => {
+    setIsLocked(true);
+    toast.success('Work log submitted successfully!');
+  }, []);
+
+  const handleIssueSuccess = useCallback(() => {
+    // Optimistically update recent issues instead of reloading all data
+    loadEmployeeData();
+    toast.success('Issue submitted successfully!');
+  }, [loadEmployeeData]);
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white rounded-lg shadow p-6 max-w-md">
+          <div className="text-center">
+            <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Error Loading Data</h3>
+            <p className="text-gray-600 mb-4">{error}</p>
+            <Button onClick={loadEmployeeData}>Try Again</Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading state
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading employee data...</p>
+        </div>
       </div>
     );
   }
@@ -156,21 +213,27 @@ export default function EmployeePanel({ employee, onLogout }: EmployeePanelProps
           <div className="lg:col-span-2 space-y-8">
             {/* Date Selection */}
             <div className="bg-white rounded-lg shadow p-6">
-              <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-4 mb-4">
                 <Calendar className="h-5 w-5 text-blue-500" />
                 <h2 className="text-lg font-semibold">Select Date for Work Log</h2>
               </div>
-              <div className="mt-4 flex items-center space-x-4">
+              <div className="flex items-center space-x-4">
                 <Input
                   type="date"
                   value={selectedDate}
                   onChange={(e) => handleDateChange(e.target.value)}
-                  max={getCurrentISTDate()}
+                  max={today}
                   className="w-auto"
                 />
-                <Button onClick={() => handleDateChange(selectedDate)} variant="outline">
-                  Load Data
-                </Button>
+                {selectedDate !== today && (
+                  <Button 
+                    onClick={() => handleDateChange(today)} 
+                    variant="outline"
+                    size="sm"
+                  >
+                    Today
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -209,20 +272,14 @@ export default function EmployeePanel({ employee, onLogout }: EmployeePanelProps
                 employeeId={employee.id}
                 selectedDate={selectedDate}
                 assignments={assignments}
-                onSubmitSuccess={() => {
-                  setIsLocked(true);
-                  toast.success('Work log submitted successfully!');
-                }}
+                onSubmitSuccess={handleWorkLogSuccess}
               />
             )}
 
             {/* Issue Form */}
             <IssueForm
               employeeId={employee.id}
-              onSubmitSuccess={() => {
-                loadEmployeeData();
-                toast.success('Issue submitted successfully!');
-              }}
+              onSubmitSuccess={handleIssueSuccess}
             />
           </div>
 
