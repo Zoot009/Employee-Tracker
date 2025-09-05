@@ -1,10 +1,10 @@
-// src/app/api/issues/[id]/route.ts
+// src/app/api/warnings/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { updateIssueSchema } from '@/lib/validations';
+import { updateWarningSchema } from '@/lib/validations';
 import { z } from 'zod';
 
-// PUT /api/issues/[id] - Update issue
+// PUT /api/warnings/[id] - Update warning (mainly to dismiss)
 export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -16,42 +16,35 @@ export async function PUT(
       return NextResponse.json(
         {
           success: false,
-          error: 'Invalid issue ID',
+          error: 'Invalid warning ID',
         },
         { status: 400 }
       );
     }
 
     const body = await request.json();
-    const validatedData = updateIssueSchema.parse(body);
+    const validatedData = updateWarningSchema.parse(body);
 
     await prisma.$connect();
 
-    // Check if issue exists
-    const existingIssue = await prisma.issue.findUnique({
+    // Check if warning exists
+    const existingWarning = await prisma.warning.findUnique({
       where: { id },
     });
 
-    if (!existingIssue) {
+    if (!existingWarning) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Issue not found',
+          error: 'Warning not found',
         },
         { status: 404 }
       );
     }
 
-    const updateData: any = { ...validatedData };
-
-    // Set resolved date if status is being changed to resolved
-    if (validatedData.issueStatus === 'resolved' && existingIssue.issueStatus !== 'resolved') {
-      updateData.resolvedDate = new Date();
-    }
-
-    const updatedIssue = await prisma.issue.update({
+    const updatedWarning = await prisma.warning.update({
       where: { id },
-      data: updateData,
+      data: validatedData,
       include: {
         employee: true,
       },
@@ -59,8 +52,8 @@ export async function PUT(
 
     return NextResponse.json({
       success: true,
-      data: updatedIssue,
-      message: 'Issue updated successfully',
+      data: updatedWarning,
+      message: 'Warning updated successfully',
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -74,11 +67,11 @@ export async function PUT(
       );
     }
 
-    console.error('Error updating issue:', error);
+    console.error('Error updating warning:', error);
     return NextResponse.json(
       {
         success: false,
-        error: 'Failed to update issue',
+        error: 'Failed to update warning',
         details: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500 }

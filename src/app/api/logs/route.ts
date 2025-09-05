@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
     // Check if data already submitted and locked for this date
     const existingSubmission = await prisma.submissionStatus.findUnique({
       where: {
-        employeeId_submissionDate: {
+        employee_date: {
           employeeId: validatedData.employeeId,
           submissionDate: new Date(validatedData.logDate),
         },
@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
       // Save or update log
       await prisma.log.upsert({
         where: {
-          employeeId_tagId_logDate: {
+          employee_tag_date: {
             employeeId: validatedData.employeeId,
             tagId: logEntry.tagId,
             logDate: new Date(validatedData.logDate),
@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
     // Record submission status
     await prisma.submissionStatus.upsert({
       where: {
-        employeeId_submissionDate: {
+        employee_date: {
           employeeId: validatedData.employeeId,
           submissionDate: new Date(validatedData.logDate),
         },

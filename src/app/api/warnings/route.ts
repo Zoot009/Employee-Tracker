@@ -1,10 +1,10 @@
-// src/app/api/issues/route.ts
+// src/app/api/warnings/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { createIssueSchema, employeeQuerySchema } from '@/lib/validations';
+import { createWarningSchema, employeeQuerySchema } from '@/lib/validations';
 import { z } from 'zod';
 
-// GET /api/issues - Get issues with filters
+// GET /api/warnings - Get warnings with filters
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -19,31 +19,24 @@ export async function GET(request: NextRequest) {
       where.employeeId = validatedQuery.employeeId;
     }
 
-    if (validatedQuery.status) {
-      where.issueStatus = validatedQuery.status;
+    if (validatedQuery.active !== undefined) {
+      where.isActive = validatedQuery.active;
     }
 
-    const issues = await prisma.issue.findMany({
+    const warnings = await prisma.warning.findMany({
       where,
       include: {
         employee: true,
       },
       orderBy: [
-        { raisedDate: 'desc' },
+        { warningDate: 'desc' },
+        { createdAt: 'desc' },
       ],
     });
 
-    // Calculate days elapsed for each issue
-    const issuesWithDaysElapsed = issues.map(issue => ({
-      ...issue,
-      daysElapsed: Math.floor(
-        (new Date().getTime() - new Date(issue.raisedDate).getTime()) / (1000 * 60 * 60 * 24)
-      ),
-    }));
-
     return NextResponse.json({
       success: true,
-      data: issuesWithDaysElapsed,
+      data: warnings,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -57,11 +50,11 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.error('Error fetching issues:', error);
+    console.error('Error fetching warnings:', error);
     return NextResponse.json(
       {
         success: false,
-        error: 'Failed to fetch issues',
+        error: 'Failed to fetch warnings',
         details: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500 }
@@ -71,11 +64,11 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/issues - Create new issue
+// POST /api/warnings - Create new warning
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const validatedData = createIssueSchema.parse(body);
+    const validatedData = createWarningSchema.parse(body);
 
     await prisma.$connect();
 
@@ -94,11 +87,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const issue = await prisma.issue.create({
+    const warning = await prisma.warning.create({
       data: {
         ...validatedData,
-        raisedDate: new Date(),
-        daysElapsed: 0,
+        warningDate: validatedData.warningDate 
+          ? new Date(validatedData.warningDate)
+          : new Date(),
       },
       include: {
         employee: true,
@@ -107,8 +101,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      data: issue,
-      message: 'Issue created successfully',
+      data: warning,
+      message: 'Warning created successfully',
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -122,11 +116,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.error('Error creating issue:', error);
+    console.error('Error creating warning:', error);
     return NextResponse.json(
       {
         success: false,
-        error: 'Failed to create issue',
+        error: 'Failed to create warning',
         details: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500 }
