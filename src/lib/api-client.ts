@@ -1,4 +1,4 @@
-// 4. Fix src/lib/api-client.ts - Simplify and remove caching that might cause issues
+// src/lib/api-client.ts - Enhanced with break management and issue endpoints
 import axios, { AxiosResponse } from 'axios';
 import { 
   Employee, 
@@ -21,16 +21,16 @@ import {
   EmployeeFilter
 } from '@/types';
 
-// Create simple axios instance
+// Create axios instance
 const api = axios.create({
   baseURL: '/api',
-  timeout: 10000,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Simple error handling
+// Error handling interceptor
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -123,7 +123,7 @@ export const warningApi = {
     api.put(`/warnings/${id}`, { isActive: false }),
 };
 
-// Break API
+// Break API - Enhanced with all endpoints
 export const breakApi = {
   getByDateRange: (filter: EmployeeFilter): Promise<AxiosResponse<ApiResponse<Break[]>>> =>
     api.get('/breaks', { params: filter }),
@@ -141,7 +141,7 @@ export const breakApi = {
     api.post('/breaks/warning', { employeeId, breakId }),
 };
 
-// Issue API
+// Issue API - Enhanced with employee-specific endpoint
 export const issueApi = {
   getAll: (): Promise<AxiosResponse<ApiResponse<Issue[]>>> =>
     api.get('/issues'),

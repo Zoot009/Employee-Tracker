@@ -1,5 +1,4 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// prisma/schema.prisma - Enhanced Schema with Attendance & Leave Management
 
 generator client {
   provider = "prisma-client-js"
@@ -11,28 +10,42 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// Core Employee Model - Enhanced
 model Employee {
   id           Int      @id @default(autoincrement())
   name         String
   email        String   @unique
   employeeCode String   @unique @map("employee_code")
+  department   String?
+  designation  String?
+  joinDate     DateTime @default(now()) @map("join_date")
+  isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   // Relations
-  assignments      Assignment[]
-  logs             Log[]
-  warnings         Warning[]
-  submissions      SubmissionStatus[]
-  breaks           Break[]
-  issues           Issue[]
+  assignments         Assignment[]
+  logs                Log[]
+  warnings            Warning[]
+  submissions         SubmissionStatus[]
+  breaks              Break[]
+  issues              Issue[]
+  leaveRequests       LeaveRequest[]
+  attendanceRecords   AttendanceRecord[]
+  flowaceRecords      FlowaceRecord[]
+  penalties           Penalty[]
+  notifications       Notification[]
 
   @@map("employees")
 }
 
+// Enhanced Tag Model
 model Tag {
   id          Int      @id @default(autoincrement())
   tagName     String   @map("tag_name")
   timeMinutes Int      @map("time_minutes")
+  category    String?  // Programming, Meeting, Testing, etc.
+  isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at")
 
   // Relations
@@ -42,6 +55,7 @@ model Tag {
   @@map("tags")
 }
 
+// Assignment Model (unchanged)
 model Assignment {
   id          Int      @id @default(autoincrement())
   employeeId  Int      @map("employee_id")
@@ -57,6 +71,7 @@ model Assignment {
   @@map("assignments")
 }
 
+// Enhanced Log Model
 model Log {
   id           Int      @id @default(autoincrement())
   employeeId   Int      @map("employee_id")
@@ -64,6 +79,9 @@ model Log {
   count        Int      @default(0)
   totalMinutes Int      @default(0) @map("total_minutes")
   logDate      DateTime @map("log_date") @db.Date
+  submittedAt  DateTime @default(now()) @map("submitted_at")
+  isManual     Boolean  @default(true) @map("is_manual") // true for manual entry, false for flowace
+  source       String   @default("manual") // manual, flowace, csv_import
   createdAt    DateTime @default(now()) @map("created_at")
 
   // Relations
@@ -74,36 +92,178 @@ model Log {
   @@map("logs")
 }
 
+// NEW: Leave Management System
+model LeaveRequest {
+  id             Int               @id @default(autoincrement())
+  employeeId     Int               @map("employee_id")
+  leaveType      LeaveType         @map("leave_type")
+  startDate      DateTime          @map("start_date") @db.Date
+  endDate        DateTime          @map("end_date") @db.Date
+  reason         String?
+  status         LeaveStatus       @default(PENDING)
+  requestedAt    DateTime          @default(now()) @map("requested_at")
+  reviewedAt     DateTime?         @map("reviewed_at")
+  reviewedBy     Int?              @map("reviewed_by")
+  adminComments  String?           @map("admin_comments")
+  isUrgent       Boolean           @default(false) @map("is_urgent")
+
+  // Relations
+  employee       Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  attendanceImpacts AttendanceRecord[]
+
+  @@map("leave_requests")
+}
+
+// NEW: Attendance Records (CSV Import + Manual)
+model AttendanceRecord {
+  id                Int                    @id @default(autoincrement())
+  employeeId        Int                    @map("employee_id")
+  date              DateTime               @db.Date
+  status            AttendanceStatus       @default(ABSENT)
+  checkInTime       DateTime?              @map("check_in_time")
+  checkOutTime      DateTime?              @map("check_out_time")
+  totalHours        Float?                 @map("total_hours")
+  leaveRequestId    Int?                   @map("leave_request_id")
+  
+  // Work Evidence
+  hasTagWork        Boolean                @default(false) @map("has_tag_work")
+  hasFlowaceWork    Boolean                @default(false) @map("has_flowace_work")
+  tagWorkMinutes    Int                    @default(0) @map("tag_work_minutes")
+  flowaceMinutes    Int                    @default(0) @map("flowace_minutes")
+  
+  // Exception Tracking
+  hasException      Boolean                @default(false) @map("has_exception")
+  exceptionType     AttendanceException?   @map("exception_type")
+  exceptionNotes    String?                @map("exception_notes")
+  
+  // Import Info
+  importSource      String                 @default("manual") @map("import_source") // csv, manual, system
+  importBatch       String?                @map("import_batch")
+  
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  // Relations
+  employee          Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveRequest      LeaveRequest?          @relation(fields: [leaveRequestId], references: [id])
+  penalties         Penalty[]
+
+  @@unique([employeeId, date], name: "employee_date_attendance")
+  @@map("attendance_records")
+}
+
+// NEW: Flowace Records (Time Tracking Data)
+model FlowaceRecord {
+  id              Int      @id @default(autoincrement())
+  employeeId      Int      @map("employee_id")
+  date            DateTime @db.Date
+  startTime       DateTime @map("start_time")
+  endTime         DateTime? @map("end_time")
+  totalMinutes    Int      @default(0) @map("total_minutes")
+  activeMinutes   Int      @default(0) @map("active_minutes")
+  idleMinutes     Int      @default(0) @map("idle_minutes")
+  
+  // Activity Details
+  applications    Json?    // Apps used during work
+  websites        Json?    // Websites visited
+  screenshots     Int      @default(0) // Number of screenshots taken
+  keystrokes      Int      @default(0)
+  mouseClicks     Int      @default(0)
+  
+  // Import Info
+  importBatch     String?  @map("import_batch")
+  rawData         Json?    @map("raw_data") // Original CSV data
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Relations
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, date, startTime], name: "employee_date_time")
+  @@map("flowace_records")
+}
+
+// Enhanced Warning Model
 model Warning {
   id             Int      @id @default(autoincrement())
   employeeId     Int      @map("employee_id")
+  warningType    WarningType @map("warning_type")
   warningDate    DateTime @map("warning_date") @db.Date
-  warningMessage String?  @map("warning_message")
+  warningMessage String   @map("warning_message")
+  severity       WarningSeverity @default(LOW)
   isActive       Boolean  @default(true) @map("is_active")
+  issuedBy       Int?     @map("issued_by")
+  relatedDate    DateTime? @map("related_date") @db.Date // Date this warning relates to
   createdAt      DateTime @default(now()) @map("created_at")
 
   // Relations
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@map("warnings")
 }
 
-model SubmissionStatus {
-  id             Int      @id @default(autoincrement())
-  employeeId     Int      @map("employee_id")
-  submissionDate DateTime @map("submission_date") @db.Date
-  submissionTime DateTime @default(now()) @map("submission_time")
-  isLocked       Boolean  @default(true) @map("is_locked")
-  totalMinutes   Int      @default(0) @map("total_minutes")
-  statusMessage  String   @default("Data submitted successfully") @map("status_message")
+// NEW: Penalty System
+model Penalty {
+  id                Int         @id @default(autoincrement())
+  employeeId        Int         @map("employee_id")
+  attendanceId      Int?        @map("attendance_id")
+  penaltyType       PenaltyType @map("penalty_type")
+  amount            Float?      // Monetary penalty amount
+  description       String
+  penaltyDate       DateTime    @map("penalty_date") @db.Date
+  issuedBy          Int?        @map("issued_by")
+  isPaid            Boolean     @default(false) @map("is_paid")
+  paidAt            DateTime?   @map("paid_at")
+  notes             String?
+  createdAt         DateTime    @default(now()) @map("created_at")
 
   // Relations
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee          Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  attendanceRecord  AttendanceRecord?  @relation(fields: [attendanceId], references: [id])
 
-  @@unique([employeeId, submissionDate], name: "employee_date")
-  @@map("submission_status")
+  @@map("penalties")
 }
 
+// NEW: Notification System
+model Notification {
+  id          Int                @id @default(autoincrement())
+  employeeId  Int                @map("employee_id")
+  type        NotificationType   @map("type")
+  title       String
+  message     String
+  isRead      Boolean            @default(false) @map("is_read")
+  priority    NotificationPriority @default(NORMAL)
+  relatedId   Int?               @map("related_id") // ID of related record (leave request, warning, etc.)
+  relatedType String?            @map("related_type") // Type of related record
+  createdAt   DateTime           @default(now()) @map("created_at")
+  readAt      DateTime?          @map("read_at")
+
+  // Relations
+  employee    Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+// NEW: Import Logs for tracking CSV imports
+model ImportLog {
+  id           Int         @id @default(autoincrement())
+  fileName     String      @map("file_name")
+  fileType     ImportType  @map("file_type")
+  status       ImportStatus @default(PROCESSING)
+  totalRecords Int         @default(0) @map("total_records")
+  processedRecords Int     @default(0) @map("processed_records")
+  errorRecords Int         @default(0) @map("error_records")
+  batchId      String      @map("batch_id")
+  uploadedBy   Int?        @map("uploaded_by")
+  errors       Json?       // Store error details
+  summary      Json?       // Import summary
+  createdAt    DateTime    @default(now()) @map("created_at")
+  completedAt  DateTime?   @map("completed_at")
+
+  @@map("import_logs")
+}
+
+// Existing models (Break, Issue, SubmissionStatus) remain mostly the same
 model Break {
   id            Int       @id @default(autoincrement())
   employeeId    Int       @map("employee_id")
@@ -115,9 +275,7 @@ model Break {
   warningSent   Boolean   @default(false) @map("warning_sent")
   createdAt     DateTime  @default(now()) @map("created_at")
 
-  // Relations
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-
   @@map("breaks")
 }
 
@@ -132,8 +290,108 @@ model Issue {
   adminResponse    String?   @map("admin_response")
   daysElapsed      Int       @default(0) @map("days_elapsed")
 
-  // Relations
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-
   @@map("issues")
+}
+
+model SubmissionStatus {
+  id             Int      @id @default(autoincrement())
+  employeeId     Int      @map("employee_id")
+  submissionDate DateTime @map("submission_date") @db.Date
+  submissionTime DateTime @default(now()) @map("submission_time")
+  isLocked       Boolean  @default(true) @map("is_locked")
+  totalMinutes   Int      @default(0) @map("total_minutes")
+  statusMessage  String   @default("Data submitted successfully") @map("status_message")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  @@unique([employeeId, submissionDate], name: "employee_date")
+  @@map("submission_status")
+}
+
+// ENUMS
+enum LeaveType {
+  FULL_LEAVE
+  WORK_FROM_HOME
+  SICK_LEAVE
+  CASUAL_LEAVE
+  EMERGENCY_LEAVE
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  DENIED
+  CANCELLED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LEAVE_APPROVED
+  WFH_APPROVED
+  LATE
+  HALF_DAY
+}
+
+enum AttendanceException {
+  WORKED_ON_APPROVED_LEAVE      // Present but on approved leave
+  NO_WORK_ON_WFH               // WFH approved but no work logged
+  ABSENT_DESPITE_DENIAL         // Absent even though leave was denied
+  WORKED_DESPITE_DENIAL         // Present despite leave denial
+  ATTENDANCE_WORK_MISMATCH      // Check-in/out doesn't match work logs
+  MISSING_CHECKOUT              // Checked in but no checkout
+  WORK_WITHOUT_CHECKIN          // Work logged but no attendance
+}
+
+enum WarningType {
+  ATTENDANCE
+  LEAVE_MISUSE
+  BREAK_EXCEEDED
+  WORK_QUALITY
+  BEHAVIORAL
+  SYSTEM_MISUSE
+}
+
+enum WarningSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PenaltyType {
+  ATTENDANCE_DEDUCTION
+  LATE_PENALTY
+  UNAUTHORIZED_ABSENCE
+  POLICY_VIOLATION
+  OTHER
+}
+
+enum NotificationType {
+  LEAVE_REQUEST_UPDATE
+  WARNING_ISSUED
+  PENALTY_ISSUED
+  ATTENDANCE_ALERT
+  SYSTEM_NOTIFICATION
+  REMINDER
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum ImportType {
+  ATTENDANCE_CSV
+  FLOWACE_CSV
+  EMPLOYEE_CSV
+}
+
+enum ImportStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+  PARTIALLY_COMPLETED
 }
