@@ -52,7 +52,7 @@ export async function processAttendanceCSV(
   uploadedBy?: number
 ): Promise<CSVProcessResult> {
   
-  const batchId = `attendance_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const batchId = `attendance_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
   
   // Create import log
   const importLog = await prisma.importLog.create({
@@ -141,7 +141,7 @@ export async function processAttendanceCSV(
 async function processAttendanceRow(
   row: AttendanceCSVRow, 
   batchId: string, 
-  rowNumber: number
+  _rowNumber: number
 ): Promise<void> {
   
   // Validate required fields
@@ -221,7 +221,7 @@ export async function processFlowaceCSV(
   uploadedBy?: number
 ): Promise<CSVProcessResult> {
   
-  const batchId = `flowace_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const batchId = `flowace_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
   
   const importLog = await prisma.importLog.create({
     data: {
@@ -307,7 +307,7 @@ export async function processFlowaceCSV(
 async function processFlowaceRow(
   row: FlowaceCSVRow, 
   batchId: string, 
-  rowNumber: number
+  _rowNumber: number
 ): Promise<void> {
   
   if (!row.employeeCode || !row.date || !row.startTime) {
@@ -375,7 +375,7 @@ async function processFlowaceRow(
       keystrokes,
       mouseClicks,
       importBatch: batchId,
-      rawData: row, // Store original row data
+      rawData: row as any, // Store original row data
     },
   });
 
